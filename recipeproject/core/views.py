@@ -1,25 +1,22 @@
-from django.shortcuts import render
-from .models import Recipe, RecipeIngredient ,Ingredient , IngredientAlternative
-from .serializers import RecipeSerializer, RecipeIngredientSerializer,IngredientSerializer
+from django.shortcuts import render, get_object_or_404
+from .models import Recipe, RecipeIngredient, Ingredient, IngredientAlternative
+from .serializers import RecipeSerializer, RecipeIngredientSerializer, IngredientSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status , generics
-from django.shortcuts import get_object_or_404
+from rest_framework import status, generics
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Count
-from django.db import models
-from .ml.ml_recommender import RecipeRecommender
 from rest_framework.filters import SearchFilter
 from django_filters.rest_framework import DjangoFilterBackend
-import os , pickle
+import os, pickle
 from sklearn.metrics.pairwise import cosine_similarity
 
+# CSV_PATH tamamen kaldırıldı!
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CSV_PATH = os.path.join(BASE_DIR, 'core', 'ml','ml_models' ,'recipes_cleaned.csv')
-recommender = RecipeRecommender(CSV_PATH)
 
-with open(os.path.join(BASE_DIR, "core","ml", "ml_models", "recipe_model.pkl"), "rb") as f:
+# Model dosyasını yükle
+with open(os.path.join(BASE_DIR, "core", "ml", "ml_models", "recipe_model.pkl"), "rb") as f:
     model_data = pickle.load(f)
 
 df = model_data["df"]
@@ -28,6 +25,7 @@ title_matrix = model_data["title_matrix"]
 ingredient_vectorizer = model_data["ingredient_vectorizer"]
 ingredient_matrix = model_data["ingredient_matrix"]
 
+# ML tavsiye fonksiyonu
 def recommend(query_title, user_ingredients, alpha=0.5, top_n=5):
     title_vec = title_vectorizer.transform([query_title])
     title_scores = cosine_similarity(title_vec, title_matrix).flatten()
@@ -54,62 +52,59 @@ def recommend(query_title, user_ingredients, alpha=0.5, top_n=5):
 
 
 class RecipePagination(PageNumberPagination):
-      page_size = 12
-      page_size_query_param = 'page_size'
-      max_page_size = 100
-    
+    page_size = 12
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
-      
+
 class RecipeDetailAPIView(APIView):
-      def get(self, request, id):
-            recipe = get_object_or_404(Recipe,id=id)
-            serializer = RecipeSerializer(recipe)
-            return Response(serializer.data,status=status.HTTP_200_OK)
-      
-      def put(self, request, id):
-            recipe = get_object_or_404(Recipe,id=id)
-            serializer = RecipeSerializer(recipe,data=request.data, partial=True)
-            if serializer.is_valid():
-                  serializer.save()
-                  return Response(serializer.data,status=status.HTTP_200_OK)
-            return Response({'errors':serializer.errors},status=status.HTTP_400_BAD_REQUEST)
-      
-      def delete(self, request,id):
-            recipe = get_object_or_404(Recipe,id=id)
-            recipe_id = recipe.id
-            recipe.delete()
-            return Response({'message':f"Recipe id: {recipe_id} has been deleted successfuly."},
-                            status=status.HTTP_204_NO_CONTENT)
-            
-            
+    def get(self, request, id):
+        recipe = get_object_or_404(Recipe, id=id)
+        serializer = RecipeSerializer(recipe)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-class GetIngredientsView(APIView):  #kullanmıyoruz ilerde lazım
-      def get(self, request):
-            ingredients = Ingredient.objects.all()
-            serializer = IngredientSerializer(ingredients ,many=True)
-            return Response(serializer.data,status=status.HTTP_200_OK)
-      
-      def post(self,request):
-            serializer = IngredientSerializer(data=request.data)
-            if serializer.is_valid():
-                  serializer.save()
-                  return Response({'message':'Ingredient Created..'},status=status.HTTP_201_CREATED)
-            return Response({'error':serializer.errors},status=status.HTTP_400_BAD_REQUEST)
-      
-      
+    def put(self, request, id):
+        recipe = get_object_or_404(Recipe, id=id)
+        serializer = RecipeSerializer(recipe, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response({'errors': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, id):
+        recipe = get_object_or_404(Recipe, id=id)
+        recipe_id = recipe.id
+        recipe.delete()
+        return Response({'message': f"Recipe id: {recipe_id} has been deleted successfully."},
+                        status=status.HTTP_204_NO_CONTENT)
+
+
+class GetIngredientsView(APIView):
+    def get(self, request):
+        ingredients = Ingredient.objects.all()
+        serializer = IngredientSerializer(ingredients, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = IngredientSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({'message': 'Ingredient Created..'}, status=status.HTTP_201_CREATED)
+        return Response({'error': serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+
 class FilteredRecipeListAPIView(generics.ListAPIView):
-      queryset = Recipe.objects.all().order_by('-created_at')
-      serializer_class = RecipeSerializer
-      pagination_class = RecipePagination
+    queryset = Recipe.objects.all().order_by('-created_at')
+    serializer_class = RecipeSerializer
+    pagination_class = RecipePagination
+    filter_backends = [DjangoFilterBackend, SearchFilter]
+    filterset_fields = ['diet_type', 'meal_type', 'season']
+    search_fields = ['title']
 
-      filter_backends = [DjangoFilterBackend, SearchFilter]
-      filterset_fields = ['diet_type', 'meal_type', 'season']
-      search_fields    = ['title']
-    
-      def get_serializer_context(self):
-            return {'request':self.request}
-      
-      
+    def get_serializer_context(self):
+        return {'request': self.request}
+
+
 class MLRecipeRecommendationAPIView(APIView):
     def post(self, request):
         query_title = request.data.get("title", "").strip()
@@ -121,7 +116,6 @@ class MLRecipeRecommendationAPIView(APIView):
 
         results = []
 
-        # Tam eşleşme değil, yakına bak (case-insensitive contains)
         exact_match = None
         if query_title:
             exact_match = Recipe.objects.filter(title__icontains=query_title).first()
@@ -139,7 +133,6 @@ class MLRecipeRecommendationAPIView(APIView):
                     "score": exact_score
                 })
 
-        #  ML önerileri (sadece malzemeyle arıyorsan alpha = 0)
         adjusted_alpha = alpha if query_title else 0.0
         ml_results = recommend(query_title, user_ingredients, alpha=adjusted_alpha)
 
